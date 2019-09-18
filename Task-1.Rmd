@@ -3,28 +3,124 @@ title: "Task 1"
 author: "Lucas Stark"
 date: "18 9 2019"
 output: html_document
+editor_options: 
+  chunk_output_type: console
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggplot2)
 ```
 
-## R Markdown
+## Load the Data
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r cars}
-summary(cars)
+```{r}
+#Load Data
+url1 <- "http://data.ssb.no/api/v0/dataset/95274.csv?lang=no"
+url2 <- "http://data.ssb.no/api/v0/dataset/95276.csv?lang=no"
+dat1 <- read.csv(url1, sep=";", dec = ",")
+dat2 <- read.csv(url2, sep=";", dec = ",")
 ```
 
-## Including Plots
+## Clean the Data
 
-You can also embed plots, for example:
-
-```{r pressure, echo=FALSE}
-plot(pressure)
+```{r}
+#Rename Columns
+colnames <- c("region", "date", "variable", "value")
+colnames(dat1) <- colnames
+colnames(dat2) <- colnames
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+```{r}
+#Turn Characters to Date Variables
+dat1 <- dat1 %>%
+  mutate(date = gsub("M","01",date)) %>%
+  mutate(date = lubridate::ydm(date))
+dat2 <- dat2 %>%
+  mutate(date = gsub("M","01",date)) %>%
+  mutate(date = lubridate::ydm(date))
+```
+
+```{r}
+# Recode variable name
+recode_task1 <- function(x){
+   y <- recode(x, 
+                           "Kapasitetsutnytting av rom (prosent)" = 
+                           "Rooms percentage capacity utilization",
+                           "Kapasitetsutnytting av senger (prosent)" =
+                           "Beds percentage capacity utilization",
+                           "Pris per rom (kr)" =
+                           "Price per room")
+   y
+}
+dat1 <- dat1 %>%
+  mutate(variable = recode_task1(variable))
+dat2 <- dat2 %>%
+  mutate(variable = recode_task1(variable))
+
+dat1$value[dat1$value==0] <- NA
+dat2$value[dat2$value==0] <- NA
+```
+
+## Merge the Dataframes
+
+```{r}
+dat1 <- dat1 %>%
+  mutate(region = as.character(region),
+         value = as.numeric(value))
+dat2 <- dat2 %>%
+  mutate(region = as.character(region),
+         value = as.numeric(value))
+dat <- merge(dat1, dat2, by=c("date","variable"))
+```
+
+
+## Calculating a new variable
+
+calculate the difference between county average room price and the national average room price per month. Use only observations with non-zero prices. What county (on average) has the highest positive and negative difference in price?
+
+```{r}
+dat <- dat %>%
+  mutate(value.diff = value.x - value.y)
+means_county <- dat %>%
+  filter(variable=="Price per room") %>%
+  group_by(region.x) %>%
+  summarise(mean = mean(value.diff, na.rm=T))
+means_years <- dat %>%
+  filter(variable=="Price per room") %>%
+  group_by(lubridate::year(date)) %>%
+  summarise(mean = mean(value.diff, na.rm=T))
+
+```
+
+## Troms Prices per Room over Time
+
+```{r}
+dat %>%
+  filter(variable=="Price per room") %>%
+  filter(region.x=="19 Troms - Romsa") %>%
+  ggplot(aes(x=date, y=value.diff)) +
+  geom_line(col="blue")
+
+```
+
+## Another Question
+
+Per county, is there any relationship (correlation) between room capacity and price since January 2010?
+
+```{r}
+library(reshape2)
+data_wide <- dcast(dat, date + region.x ~ variable, value.var="value.x")
+names(data_wide)[3:5] <- c("roomCap","bedCap","priceRoom")
+cor_county <- data_wide %>% 
+  filter(date >= as.Date("2010-01-01")) %>%
+  group_by(region.x) %>%
+  summarise(cor = cor(x=roomCap, y=priceRoom,
+            use="pairwise.complete.obs",
+            method="pearson"))
+?spread()
+```
+
+
