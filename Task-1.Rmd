@@ -1,8 +1,10 @@
 ---
-title: "Task 1"
+title: "Room Costs in Norwegian Counties"
 author: "Lucas Stark"
 date: "18 9 2019"
-output: html_document
+output: 
+  html_document:
+    number_sections: true
 editor_options: 
   chunk_output_type: console
 ---
@@ -11,12 +13,15 @@ editor_options:
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(ggplot2)
+library(scales)
+library(reshape2)
+library(Hmisc)
+rversion <- paste0(R.Version()[["major"]],".",R.Version()[["minor"]])
 ```
 
-## Load the Data
+## Introduction
 
-
-```{r}
+```{r load, include=FALSE}
 #Load Data
 url1 <- "http://data.ssb.no/api/v0/dataset/95274.csv?lang=no"
 url2 <- "http://data.ssb.no/api/v0/dataset/95276.csv?lang=no"
@@ -24,16 +29,16 @@ dat1 <- read.csv(url1, sep=";", dec = ",")
 dat2 <- read.csv(url2, sep=";", dec = ",")
 ```
 
-## Clean the Data
+The data for this project was taken from the webpage of the [statistisk sentralbyrå](http://data.ssb.no/api/v0/dataset/) of Norway. Two datasets about prices and capacities of rooms for overnight stays were downloaded into R (Version `r rversion`). After this, the dataframes were merged and cleaned. Eventually, a difference score between the individual mean values of the Norwegian counties' price per room and the mean of the overall mean of Norway was computed.
 
-```{r}
+```{r rename, include=FALSE}
 #Rename Columns
 colnames <- c("region", "date", "variable", "value")
 colnames(dat1) <- colnames
 colnames(dat2) <- colnames
 ```
 
-```{r}
+```{r convert, include=FALSE}
 #Turn Characters to Date Variables
 dat1 <- dat1 %>%
   mutate(date = gsub("M","01",date)) %>%
@@ -43,7 +48,7 @@ dat2 <- dat2 %>%
   mutate(date = lubridate::ydm(date))
 ```
 
-```{r}
+```{r recode, include=FALSE}
 # Recode variable name
 recode_task1 <- function(x){
    y <- recode(x, 
@@ -64,9 +69,7 @@ dat1$value[dat1$value==0] <- NA
 dat2$value[dat2$value==0] <- NA
 ```
 
-## Merge the Dataframes
-
-```{r}
+```{r merge, include=FALSE}
 dat1 <- dat1 %>%
   mutate(region = as.character(region),
          value = as.numeric(value))
@@ -76,12 +79,11 @@ dat2 <- dat2 %>%
 dat <- merge(dat1, dat2, by=c("date","variable"))
 ```
 
+## Analysis
 
-## Calculating a new variable
+### Least and most expensive counties and years
 
-calculate the difference between county average room price and the national average room price per month. Use only observations with non-zero prices. What county (on average) has the highest positive and negative difference in price?
-
-```{r}
+```{r newvariable, include=FALSE}
 dat <- dat %>%
   mutate(value.diff = value.x - value.y)
 means_county <- dat %>%
@@ -92,35 +94,75 @@ means_years <- dat %>%
   filter(variable=="Price per room") %>%
   group_by(lubridate::year(date)) %>%
   summarise(mean = mean(value.diff, na.rm=T))
-
+colnames(means_years) <- c("year","mean")
+overall_mean <- mean(dat2[dat2$variable=="Price per room","value"],na.rm=T)
+max_county <- gsub("\\d", "",means_county[means_county$mean==max(means_county$mean),"region.x"])
+min_county <- gsub("\\d", "",means_county[means_county$mean==min(means_county$mean),"region.x"])
+#die hier gehen nich so??
+max_year_vec <- means_years$mean==max(means_years$mean, na.rm=T)
+max_year_vec[is.na(max_year_vec)] <- F
+max_year <- means_years[max_year_vec,"year"]
+min_year_vec <- means_years$mean==min(means_years$mean, na.rm=T)
+min_year_vec[is.na(min_year_vec)] <- F
+min_year <- means_years[min_year_vec,"year"]
 ```
 
-## Troms Prices per Room over Time
+Two aspects of the dataframe were analyzed to get an overview over the relative price situation inbetween Norwegian counties. 
 
-```{r}
-dat %>%
+First, a mean value was computed for each county over every year of data observation. That made apparent that `r max_county` was the most expensive county with `r round(max(means_county$mean),2)` NOK per room above the national average. `r min_county` was the least expensive county with `r round(min(means_county$mean),2)` NOK below the national average.
+
+Second, a mean value was computed for each year over every county. That made apparent that `r max_year` was the most expensive year with `r round(means_years$mean[max_year_vec],2)` NOK per room above the average of all years. `r min_year` was the least expensive year with `r round(means_years$mean[min_year_vec],2)` NOK below the average.
+
+### Troms' Prices per Room over Time from 1999 till Today
+
+As a next step, the monthly averages of prices per room for the Troms county were checked in comparison to the national average.
+
+```{r, echo=FALSE, warning = FALSE}
+troms_graphic <- dat %>%
   filter(variable=="Price per room") %>%
   filter(region.x=="19 Troms - Romsa") %>%
   ggplot(aes(x=date, y=value.diff)) +
-  geom_line(col="blue")
+  geom_line(col="blue") +
+  geom_smooth(method = 'loess',formula = 'y ~ x')  +
+  ggtitle("Troms' Price per Room in Relation to National Average") + 
+  xlab("Date") + 
+  ylab("Price per Room compared to National Average") + 
+  scale_x_date(labels = date_format("%Y"), breaks='2 years', 
+               limits = c(as.Date("1999-01-01"),Sys.Date()))
+troms_graphic
 
 ```
 
-## Another Question
+The graph shows that the room prices in the county of Troms were mostly below average after 1999. However, since 2016 the prices started to variate more extremely. 
 
-Per county, is there any relationship (correlation) between room capacity and price since January 2010?
+### Relationship between Room Capacity and Price since January 2010
 
-```{r}
-library(reshape2)
+Per county, is there any relationship between room capacity and price since January 2010? For this, the correlations for each county were computed. These can be seen in the following table.
+
+```{r, echo = F}
+
 data_wide <- dcast(dat, date + region.x ~ variable, value.var="value.x")
 names(data_wide)[3:5] <- c("roomCap","bedCap","priceRoom")
+
 cor_county <- data_wide %>% 
   filter(date >= as.Date("2010-01-01")) %>%
   group_by(region.x) %>%
-  summarise(cor = cor(x=roomCap, y=priceRoom,
-            use="pairwise.complete.obs",
-            method="pearson"))
-?spread()
+  mutate(cor = rcorr(x=roomCap, y=priceRoom,
+            type="pearson")[["r"]][2],
+         p = rcorr(x=roomCap, y=priceRoom,
+            type="pearson")[["P"]][2])
+cortable <- cor_county %>%
+  filter(date == as.Date("2010-01-01")) #just choose one
+cortable <- cortable[,c(2,6:7)]  
+for (i in 1:length(cortable$cor)){
+  cortable[i,1] <- gsub(c("\\d"), "", cortable[i,1])
+  cortable[i,1] <- gsub(c("\\(-\\)"), "", cortable[i,1])
+}
+cor_sign <- ifelse(cortable[,"p"]<.05,T,F)
+mean_cor_sign <- mean(cortable$cor[cor_sign], na.rm=T)
+names(cortable) <- c("County","Correlation","P value")
+knitr::kable(cortable, format="pandoc", digits=2)
+
 ```
 
-
+It is observable that `r ifelse(mean(cor_sign,na.rm=T)>.05, print("more"), print("less"))` than half of the correlations are significant with a significance level of $\alpha < .05$. The average of these significant correlations is `r round(mean_cor_sign,2)`. This speaks for an overall `r ifelse(mean_cor_sign>0,print("positive"),print("negative"))` relationship between room capacity and price in these counties.
